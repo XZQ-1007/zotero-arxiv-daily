@@ -215,67 +215,31 @@ class ArxivRetriever(BaseRetriever):
             raise ValueError("category must be specified for arxiv.")
 
     def _retrieve_raw_papers(self) -> list[ArxivResult]:
-        query = '+'.join(self.config.source.arxiv.category)
-        include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
-        rss_url = f"https://rss.arxiv.org/atom/{query}"
+        categories = self.config.source.arxiv.category
+        query = " OR ".join(f"cat:{cat}" for cat in categories)
 
-        # Get latest papers from arxiv RSS feed with retry
-        retry_num = 5
-        delay_time = 5
-        feed = None
-        for attempt in range(retry_num):
-            feed = feedparser.parse(rss_url)
-            status = getattr(feed, "status", None)
-            bozo = getattr(feed, "bozo", False)
-            bozo_exc = getattr(feed, "bozo_exception", None)
-            feed_meta = getattr(feed, "feed", None)
-            title = getattr(feed_meta, "title", "") if feed_meta else ""
+        # 获取最近发布的5篇，不限制必须是当天发表
+        search = arxiv.Search(
+            query=query,
+            max_results=5,
+            sort_by=arxiv.SortCriterion.SubmittedDate,
+            sort_order=arxiv.SortOrder.Descending,
+        )
 
-            if title and "Feed error for query" in title:
-                raise Exception(f"Invalid ARXIV_QUERY: {query}.")
+        client = arxiv.Client(
+            page_size=5,
+            delay_seconds=3.0,
+            num_retries=5,
+        )
 
-            # Validate HTTP status and parser state before accepting the feed
-            is_http_error = status is not None and status >= 400
-            is_parser_error = bool(bozo and not getattr(feed, "entries", None))
-            has_valid_feed = bool(feed_meta and title and not is_http_error and not is_parser_error)
-
-            if has_valid_feed:
-                break
-
-            error_msg = f"status={status}" if status is not None else f"bozo_exception={bozo_exc}"
-            if attempt < retry_num - 1:
-                logger.warning(
-                    f"Failed to fetch valid arxiv RSS feed ({error_msg}), retrying in {delay_time}s..."
-                )
-                sleep(delay_time)
-        else:
-            status = getattr(feed, "status", None)
-            bozo_exc = getattr(feed, "bozo_exception", None)
+        papers = list(client.results(search))
+        if not papers:
             raise RuntimeError(
-                f"Failed to fetch valid arxiv RSS feed from {rss_url} after {retry_num} attempts "
-                f"(status={status}, bozo_exception={bozo_exc})"
+                "arXiv历史检索未返回论文，请检查分类或稍后重试。"
             )
 
-        allowed_announce_types = {"new", "cross"} if include_cross_list else {"new"}
-        target_entries = [
-            i for i in feed.entries
-            if i.get("arxiv_announce_type", "new") in allowed_announce_types
-        ]
-        if self.config.executor.debug:
-            target_entries = target_entries[:10]
-
-        seen_paper_ids = set()
-        raw_papers = []
-        for entry in target_entries:
-            raw_id = getattr(entry, "id", "") or ""
-            paper_id = raw_id.removeprefix("oai:arXiv.org:")
-            if paper_id and paper_id in seen_paper_ids:
-                continue
-            if paper_id:
-                seen_paper_ids.add(paper_id)
-            raw_papers.append(_entry_to_arxiv_result(entry))
-
-        return raw_papers
+        logger.info(f"Retrieved {len(papers)} recent arxiv papers")
+        return papers
 
     def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
         title = raw_paper.title
