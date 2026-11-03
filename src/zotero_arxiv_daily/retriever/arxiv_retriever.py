@@ -221,13 +221,13 @@ class ArxivRetriever(BaseRetriever):
         # 获取最近发布的5篇，不限制必须是当天发表
         search = arxiv.Search(
             query=query,
-            max_results=5,
+            max_results=200,
             sort_by=arxiv.SortCriterion.SubmittedDate,
             sort_order=arxiv.SortOrder.Descending,
         )
 
         client = arxiv.Client(
-            page_size=5,
+            page_size=100,
             delay_seconds=3.0,
             num_retries=5,
         )
@@ -242,23 +242,14 @@ class ArxivRetriever(BaseRetriever):
         return papers
 
     def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
-        title = raw_paper.title
-        authors = [a.name for a in raw_paper.authors]
-        abstract = raw_paper.summary
-        pdf_url = raw_paper.pdf_url
-        full_text = extract_text_from_tar(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_html(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_pdf(raw_paper)
         return Paper(
             source=self.name,
-            title=title,
-            authors=authors,
-            abstract=abstract,
+            title=raw_paper.title,
+            authors=[a.name for a in raw_paper.authors],
+            abstract=raw_paper.summary,
             url=raw_paper.entry_id,
-            pdf_url=pdf_url,
-            full_text=full_text,
+            pdf_url=raw_paper.pdf_url,
+            full_text=None,
         )
 
 
